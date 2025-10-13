@@ -1,4 +1,4 @@
-# Bun Practice - Database Wrappers
+# Bun - Database Wrappers
 
 A collection of database wrapper classes for Bun's SQL API, providing simplified interfaces for MySQL, Redis, and SQLite.
 
