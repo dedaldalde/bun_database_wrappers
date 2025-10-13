@@ -1,6 +1,48 @@
 import { SQL } from "bun";
 
 /**
+ * Custom error class for database operations with enhanced context
+ */
+export class DBError extends Error {
+  public readonly context: { query?: string; params?: any[] };
+  public override readonly cause?: unknown;
+
+  constructor(
+    message: string,
+    context: { query?: string; params?: any[] },
+    cause?: unknown
+  ) {
+    super(message);
+    this.name = "DBError";
+    this.context = context;
+    this.cause = cause;
+    if (cause instanceof Error) {
+      this.stack = `${this.stack}\nCaused by: ${cause.stack}`;
+    }
+  }
+}
+
+/**
+ * Result shape for queries
+ */
+export interface QueryResult<T = unknown> {
+  rows?: T[];
+  affectedRows?: number;
+  lastInsertId?: number;
+}
+
+/**
+ * Escape and validate SQL identifiers (table/column names)
+ * Only alphanumerics and underscores are allowed
+ */
+function quoteIdentifier(identifier: string): string {
+  if (!/^[A-Za-z0-9_]+$/.test(identifier)) {
+    throw new Error(`Invalid SQL identifier: "${identifier}". Only alphanumerics and underscores allowed.`);
+  }
+  return `\`${identifier}\``;
+}
+
+/**
  * Connection options for MySQL
  */
 export interface MySQLConnectionOptions {
@@ -51,8 +93,8 @@ export class MySQLWrapper {
    * @param params - Query parameters (default: [])
    * @returns Query result
    */
-  async run(query: string, params: any[] = []) {
-    return await this.executeQuery(query, params);
+  async run<T = unknown>(query: string, params: any[] = []): Promise<T> {
+    return await this.executeQuery<T>(query, params);
   }
 
   /**
@@ -61,8 +103,8 @@ export class MySQLWrapper {
    * @param params - Query parameters (default: [])
    * @returns Array of row objects
    */
-  async all(query: string, params: any[] = []) {
-    return await this.executeQuery(query, params);
+  async all<T = unknown>(query: string, params: any[] = []): Promise<T[]> {
+    return await this.executeQuery<T[]>(query, params);
   }
 
   /**
@@ -71,8 +113,8 @@ export class MySQLWrapper {
    * @param params - Query parameters (default: [])
    * @returns Single row object or undefined
    */
-  async get(query: string, params: any[] = []) {
-    const results = await this.executeQuery(query, params);
+  async get<T = unknown>(query: string, params: any[] = []): Promise<T | undefined> {
+    const results = await this.executeQuery<T[]>(query, params);
     return results[0];
   }
 
@@ -82,13 +124,13 @@ export class MySQLWrapper {
    * @param params - Query parameters (default: [])
    * @returns Single scalar value or undefined
    */
-  async scalar(query: string, params: any[] = []) {
-    const results = await this.executeQuery(query, params);
+  async scalar<T = unknown>(query: string, params: any[] = []): Promise<T | undefined> {
+    const results = await this.executeQuery<any[]>(query, params);
     if (results.length > 0) {
       const firstRow = results[0];
       const firstKey = Object.keys(firstRow)[0];
       if (firstKey !== undefined) {
-        return firstRow[firstKey];
+        return firstRow[firstKey] as T;
       }
     }
     return undefined;
@@ -96,17 +138,25 @@ export class MySQLWrapper {
 
   /**
    * Helper method to execute queries with parameters
+   * Enhanced with error wrapping for better debugging
    * @param query - SQL query string
    * @param params - Array of parameters
    * @returns Query results
    */
-  private async executeQuery(query: string, params: any[] = []) {
-    if (params.length === 0) {
-      return await this.db.unsafe(query);
+  private async executeQuery<T = unknown>(query: string, params: any[] = []): Promise<T> {
+    try {
+      if (params.length === 0) {
+        return await this.db.unsafe(query);
+      }
+      // MySQL uses ? placeholders directly (not $1, $2)
+      return await this.db.unsafe(query, params);
+    } catch (error) {
+      throw new DBError(
+        `MySQL query failed: ${error instanceof Error ? error.message : String(error)}`,
+        { query, params },
+        error
+      );
     }
-
-    // MySQL uses ? placeholders directly (not $1, $2)
-    return await this.db.unsafe(query, params);
   }
 
   /**
@@ -132,13 +182,26 @@ export class MySQLWrapper {
    * Create a table with the given schema
    * @param name - Table name
    * @param schema - Object mapping column names to their SQL type definitions
+   *                Supports columns, indexes, and constraints
    * @returns Query result
    */
-  async createTable(name: string, schema: Record<string, string>) {
+  async createTable(name: string, schema: Record<string, string>): Promise<unknown> {
     const columns = Object.entries(schema)
-      .map(([key, value]) => `${key} ${value}`)
+      .map(([key, value]) => {
+        // Check if this is a constraint or index definition (starts with keywords)
+        const constraintKeywords = ['INDEX', 'KEY', 'UNIQUE', 'PRIMARY', 'FOREIGN', 'CHECK', 'CONSTRAINT'];
+        const isConstraint = constraintKeywords.some(keyword => key.toUpperCase().startsWith(keyword));
+        
+        if (isConstraint) {
+          // For constraints/indexes, use the key as-is (it's already a SQL clause)
+          return `${key} ${value}`;
+        } else {
+          // For regular columns, quote the identifier
+          return `${quoteIdentifier(key)} ${value}`;
+        }
+      })
       .join(", ");
-    const query = `CREATE TABLE IF NOT EXISTS ${name} (${columns})`;
+    const query = `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(name)} (${columns})`;
     return await this.run(query);
   }
 
@@ -148,11 +211,13 @@ export class MySQLWrapper {
    * @param data - Object with column-value pairs to insert
    * @returns Inserted row(s) if possible, or result info
    */
-  async insert(table: string, data: Record<string, any>) {
-    // Use Bun's SQL helper for object insertion
+  async insert<T extends Record<string, unknown>>(table: string, data: T): Promise<QueryResult<T>> {
+    // Validate identifier before use
+    quoteIdentifier(table);
+    // Use Bun's SQL helper for object insertion - it handles escaping internally
     // Note: MySQL doesn't support RETURNING clause like PostgreSQL
     const result = await this.db`INSERT INTO ${this.db(table)} ${this.db(data)}`;
-    return result;
+    return result as unknown as QueryResult<T>;
   }
 
   /**
@@ -161,9 +226,12 @@ export class MySQLWrapper {
    * @param dataArray - Array of objects with column-value pairs
    * @returns Result with affected rows
    */
-  async insertMany(table: string, dataArray: Record<string, any>[]) {
-    // Use Bun's bulk insert helper
-    return await this.db`INSERT INTO ${this.db(table)} ${this.db(dataArray)}`;
+  async insertMany<T extends Record<string, unknown>>(table: string, dataArray: T[]): Promise<QueryResult<T>> {
+    // Validate identifier before use
+    quoteIdentifier(table);
+    // Use Bun's bulk insert helper - it handles escaping internally
+    const result = await this.db`INSERT INTO ${this.db(table)} ${this.db(dataArray)}`;
+    return result as unknown as QueryResult<T>;
   }
 
   /**
@@ -172,11 +240,11 @@ export class MySQLWrapper {
    * @param data - Object with column-value pairs to insert
    * @returns Query result
    */
-  async insertIgnore(table: string, data: Record<string, any>) {
+  async insertIgnore<T extends Record<string, unknown>>(table: string, data: T): Promise<unknown> {
     const columns = Object.keys(data);
     const values = Object.values(data);
     const placeholders = values.map(() => "?").join(", ");
-    const query = `INSERT IGNORE INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`;
+    const query = `INSERT IGNORE INTO ${quoteIdentifier(table)} (${columns.map(quoteIdentifier).join(", ")}) VALUES (${placeholders})`;
     return await this.run(query, values);
   }
 
@@ -187,21 +255,21 @@ export class MySQLWrapper {
    * @param updateColumns - Columns to update on duplicate (if not provided, updates all non-key columns)
    * @returns Query result
    */
-  async upsert(
+  async upsert<T extends Record<string, unknown>>(
     table: string,
-    data: Record<string, any>,
+    data: T,
     updateColumns?: string[]
-  ) {
+  ): Promise<unknown> {
     const columns = Object.keys(data);
     const values = Object.values(data);
     const placeholders = columns.map(() => "?").join(", ");
     
     const columnsToUpdate = updateColumns || columns;
     const updateClause = columnsToUpdate
-      .map(col => `${col} = VALUES(${col})`)
+      .map(col => `${quoteIdentifier(col)} = VALUES(${quoteIdentifier(col)})`)
       .join(", ");
     
-    const query = `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateClause}`;
+    const query = `INSERT INTO ${quoteIdentifier(table)} (${columns.map(quoteIdentifier).join(", ")}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateClause}`;
     return await this.run(query, values);
   }
 
@@ -213,15 +281,15 @@ export class MySQLWrapper {
    * @param whereParams - Parameters for the WHERE clause (default: [])
    * @returns Query result with affected rows
    */
-  async update(
+  async update<T extends Record<string, unknown>>(
     table: string,
-    data: Record<string, any>,
+    data: T,
     whereClause: string,
     whereParams: any[] = []
-  ) {
-    const setClause = Object.keys(data).map(k => `${k} = ?`).join(", ");
+  ): Promise<unknown> {
+    const setClause = Object.keys(data).map(k => `${quoteIdentifier(k)} = ?`).join(", ");
     const values = Object.values(data);
-    const query = `UPDATE ${table} SET ${setClause} WHERE ${whereClause}`;
+    const query = `UPDATE ${quoteIdentifier(table)} SET ${setClause} WHERE ${whereClause}`;
     return await this.run(query, [...values, ...whereParams]);
   }
 
@@ -232,8 +300,8 @@ export class MySQLWrapper {
    * @param whereParams - Parameters for the WHERE clause (default: [])
    * @returns Query result with affected rows
    */
-  async delete(table: string, whereClause: string, whereParams: any[] = []) {
-    const query = `DELETE FROM ${table} WHERE ${whereClause}`;
+  async delete(table: string, whereClause: string, whereParams: any[] = []): Promise<unknown> {
+    const query = `DELETE FROM ${quoteIdentifier(table)} WHERE ${whereClause}`;
     return await this.run(query, whereParams);
   }
 
@@ -245,14 +313,14 @@ export class MySQLWrapper {
    * @param whereParams - Parameters for the WHERE clause (default: [])
    * @returns Array of row objects
    */
-  async select(
+  async select<T = unknown>(
     table: string,
     columns = "*",
     whereClause: string | null = null,
     whereParams: any[] = []
-  ) {
-    const query = `SELECT ${columns} FROM ${table}${whereClause ? ` WHERE ${whereClause}` : ""}`;
-    return await this.all(query, whereParams);
+  ): Promise<T[]> {
+    const query = `SELECT ${columns} FROM ${quoteIdentifier(table)}${whereClause ? ` WHERE ${whereClause}` : ""}`;
+    return await this.all<T>(query, whereParams);
   }
 
   /**
@@ -262,9 +330,9 @@ export class MySQLWrapper {
    * @param whereParams - Parameters for the WHERE clause (default: [])
    * @returns Single row object or undefined
    */
-  async getRow(table: string, whereClause: string, whereParams: any[] = []) {
-    const query = `SELECT * FROM ${table} WHERE ${whereClause} LIMIT 1`;
-    return await this.get(query, whereParams);
+  async getRow<T = unknown>(table: string, whereClause: string, whereParams: any[] = []): Promise<T | undefined> {
+    const query = `SELECT * FROM ${quoteIdentifier(table)} WHERE ${whereClause} LIMIT 1`;
+    return await this.get<T>(query, whereParams);
   }
 
   /**
@@ -275,14 +343,14 @@ export class MySQLWrapper {
    * @param whereParams - Parameters for the WHERE clause (default: [])
    * @returns Single scalar value or undefined
    */
-  async getValue(
+  async getValue<T = unknown>(
     table: string,
     column: string,
     whereClause: string,
     whereParams: any[] = []
-  ) {
-    const query = `SELECT ${column} FROM ${table} WHERE ${whereClause} LIMIT 1`;
-    return await this.scalar(query, whereParams);
+  ): Promise<T | undefined> {
+    const query = `SELECT ${quoteIdentifier(column)} FROM ${quoteIdentifier(table)} WHERE ${whereClause} LIMIT 1`;
+    return await this.scalar<T>(query, whereParams);
   }
 
   /**
@@ -333,15 +401,33 @@ export class MySQLWrapper {
    * @param tableName - Name of the table
    * @returns Array of column information
    */
-  async describeTable(tableName: string) {
-    return await this.all(`DESCRIBE ${tableName}`);
+  async describeTable(tableName: string): Promise<unknown[]> {
+    return await this.all(`DESCRIBE ${quoteIdentifier(tableName)}`);
   }
 
   /**
    * Close the database connection pool
    * @param options - Close options (timeout in seconds)
    */
-  async close(options?: { timeout?: number }) {
+  async close(options?: { timeout?: number }): Promise<void> {
     await this.db.close(options);
   }
+
+  /**
+   * Support for async dispose pattern (using await ... syntax)
+   * Automatically closes connection when wrapper goes out of scope
+   */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
+  }
+}
+
+/**
+ * Factory function to create a MySQL wrapper instance
+ * @param connectionString - MySQL connection string
+ * @param options - Optional connection options
+ * @returns A new MySQLWrapper instance
+ */
+export function createMySQL(connectionString: string, options?: MySQLConnectionOptions): MySQLWrapper {
+  return new MySQLWrapper(connectionString, options);
 }

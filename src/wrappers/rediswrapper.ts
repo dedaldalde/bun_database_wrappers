@@ -82,23 +82,30 @@ export class RedisWrapper {
   
   /**
    * Get and parse a JSON value from a key
+   * Type-safe JSON retrieval with proper error handling
    * @param key - The key to retrieve
    * @returns Parsed JSON object or null if key doesn't exist or parsing fails
    */
-  async getJSON<T = any>(key: Key): Promise<T | null> {
+  async getJSON<T = unknown>(key: Key): Promise<T | null> {
     const v = await this.get(key);
     if (v == null) return null;
-    try { return JSON.parse(v) as T; } catch { return null; }
+    try { 
+      return JSON.parse(v) as T; 
+    } catch (error) {
+      console.warn(`Failed to parse JSON for key "${key}":`, error);
+      return null;
+    }
   }
   
   /**
    * Set a JSON value for a key
+   * Type-safe JSON storage
    * @param key - The key to set
    * @param obj - The object to stringify and store
    * @param opts - Optional SET command options
    * @returns OK if successful
    */
-  async setJSON(key: Key, obj: any, opts?: SetOptions) {
+  async setJSON<T = unknown>(key: Key, obj: T, opts?: SetOptions): Promise<unknown> {
     return this.set(key, JSON.stringify(obj), opts);
   }
   
@@ -165,8 +172,19 @@ export class RedisWrapper {
    * @param seconds - Number of seconds until expiration
    * @returns 1 if timeout was set, 0 if key doesn't exist
    */
-  async expire(key: Key, seconds: number) { 
+  async expire(key: Key, seconds: number): Promise<number> { 
     return this.client.expire(key, seconds); 
+  }
+
+  /**
+   * Set TTL in a more ergonomic way
+   * @param key - The key to set expiration on
+   * @param seconds - Number of seconds until expiration
+   * @returns true if timeout was set, false if key doesn't exist
+   */
+  async setTTL(key: Key, seconds: number): Promise<boolean> {
+    const result = await this.expire(key, seconds);
+    return result === 1;
   }
   
   /**
@@ -174,7 +192,7 @@ export class RedisWrapper {
    * @param key - The key to check
    * @returns TTL in seconds, -1 if key exists but has no TTL, -2 if key doesn't exist
    */
-  async ttl(key: Key) { 
+  async ttl(key: Key): Promise<number> { 
     return this.client.ttl(key); 
   }
 
@@ -378,18 +396,34 @@ export class RedisWrapper {
 
   /**
    * Execute multiple commands as an atomic transaction
+   * Enhanced with automatic DISCARD on error to prevent dangling transactions
    * @param commands - Array of commands (strings or string arrays)
    * @returns Results of all commands in the transaction
    */
-  async transaction(commands: (string | string[])[]) {
+  async transaction(commands: (string | string[])[]): Promise<unknown> {
     await this.client.send("MULTI", []);
-    for (const cmd of commands) {
-      const parsed = typeof cmd === "string" ? cmd.split(/\s+/) : cmd;
-      if (parsed.length > 0 && parsed[0]) {
-        await this.client.send(parsed[0]!, parsed.slice(1));
+    let needsDiscard = true;
+    
+    try {
+      for (const cmd of commands) {
+        const parsed = typeof cmd === "string" ? cmd.split(/\s+/) : cmd;
+        if (parsed.length > 0 && parsed[0]) {
+          await this.client.send(parsed[0]!, parsed.slice(1));
+        }
+      }
+      const result = await this.client.send("EXEC", []);
+      needsDiscard = false;
+      return result;
+    } finally {
+      // If we failed before EXEC, clean up the transaction
+      if (needsDiscard) {
+        try {
+          await this.client.send("DISCARD", []);
+        } catch (discardError) {
+          console.warn("Failed to DISCARD transaction:", discardError);
+        }
       }
     }
-    return this.client.send("EXEC", []);
   }
 
   /**
@@ -404,7 +438,24 @@ export class RedisWrapper {
   /**
    * Close the Redis connection
    */
-  async close() {
+  async close(): Promise<void> {
     this.client.close();
   }
+
+  /**
+   * Support for async dispose pattern (using await ... syntax)
+   * Automatically closes connection when wrapper goes out of scope
+   */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
+  }
+}
+
+/**
+ * Factory function to create a Redis wrapper instance
+ * @param url - Redis connection URL (default: "redis://localhost:6379")
+ * @returns A connected RedisWrapper instance
+ */
+export async function createRedis(url?: string): Promise<RedisWrapper> {
+  return await RedisWrapper.connect(url);
 }

@@ -1,6 +1,48 @@
 import { SQL } from "bun";
 
 /**
+ * Custom error class for database operations with enhanced context
+ */
+export class DBError extends Error {
+  public readonly context: { query?: string; params?: any[] };
+  public override readonly cause?: unknown;
+
+  constructor(
+    message: string,
+    context: { query?: string; params?: any[] },
+    cause?: unknown
+  ) {
+    super(message);
+    this.name = "DBError";
+    this.context = context;
+    this.cause = cause;
+    if (cause instanceof Error) {
+      this.stack = `${this.stack}\nCaused by: ${cause.stack}`;
+    }
+  }
+}
+
+/**
+ * Result shape for queries
+ */
+export interface QueryResult<T = unknown> {
+  rows?: T[];
+  affectedRows?: number;
+  lastInsertId?: number;
+}
+
+/**
+ * Escape and validate SQL identifiers (table/column names)
+ * Only alphanumerics and underscores are allowed
+ */
+function quoteIdentifier(identifier: string): string {
+  if (!/^[A-Za-z0-9_]+$/.test(identifier)) {
+    throw new Error(`Invalid SQL identifier: "${identifier}". Only alphanumerics and underscores allowed.`);
+  }
+  return `"${identifier}"`; // SQLite uses double quotes for identifiers
+}
+
+/**
  * A wrapper class for SQLite database operations using Bun's SQL API
  */
 export class SQLiteWrapper {
@@ -31,10 +73,8 @@ export class SQLiteWrapper {
    * @param params - Query parameters (default: [])
    * @returns Statement run result
    */
-  async run(query: string, params: any[] = []) {
-    // Convert parameterized query to template literal format
-    const result = await this.executeQuery(query, params);
-    return result;
+  async run<T = unknown>(query: string, params: any[] = []): Promise<T> {
+    return await this.executeQuery<T>(query, params);
   }
 
   /**
@@ -43,8 +83,8 @@ export class SQLiteWrapper {
    * @param params - Query parameters (default: [])
    * @returns Array of row objects
    */
-  async all(query: string, params: any[] = []) {
-    return await this.executeQuery(query, params);
+  async all<T = unknown>(query: string, params: any[] = []): Promise<T[]> {
+    return await this.executeQuery<T[]>(query, params);
   }
 
   /**
@@ -53,8 +93,8 @@ export class SQLiteWrapper {
    * @param params - Query parameters (default: [])
    * @returns Single row object or undefined
    */
-  async get(query: string, params: any[] = []) {
-    const results = await this.executeQuery(query, params);
+  async get<T = unknown>(query: string, params: any[] = []): Promise<T | undefined> {
+    const results = await this.executeQuery<T[]>(query, params);
     return results[0];
   }
 
@@ -64,13 +104,13 @@ export class SQLiteWrapper {
    * @param params - Query parameters (default: [])
    * @returns Single scalar value or undefined
    */
-  async scalar(query: string, params: any[] = []) {
-    const results = await this.executeQuery(query, params);
+  async scalar<T = unknown>(query: string, params: any[] = []): Promise<T | undefined> {
+    const results = await this.executeQuery<any[]>(query, params);
     if (results.length > 0) {
       const firstRow = results[0];
       const firstKey = Object.keys(firstRow)[0];
       if (firstKey !== undefined) {
-        return firstRow[firstKey];
+        return firstRow[firstKey] as T;
       }
     }
     return undefined;
@@ -78,21 +118,29 @@ export class SQLiteWrapper {
 
   /**
    * Helper method to execute queries with parameters
+   * Enhanced with error wrapping for better debugging
    * @param query - SQL query string
    * @param params - Array of parameters
    * @returns Query results
    */
-  private async executeQuery(query: string, params: any[] = []) {
-    // Build the query dynamically using template literal
-    if (params.length === 0) {
-      return await this.db.unsafe(query);
-    }
+  private async executeQuery<T = unknown>(query: string, params: any[] = []): Promise<T> {
+    try {
+      if (params.length === 0) {
+        return await this.db.unsafe(query);
+      }
 
-    // Replace ? placeholders with $1, $2, etc. for Bun SQL API
-    let paramIndex = 1;
-    const convertedQuery = query.replace(/\?/g, () => `$${paramIndex++}`);
-    
-    return await this.db.unsafe(convertedQuery, params);
+      // Replace ? placeholders with $1, $2, etc. for Bun SQL API
+      let paramIndex = 1;
+      const convertedQuery = query.replace(/\?/g, () => `$${paramIndex++}`);
+      
+      return await this.db.unsafe(convertedQuery, params);
+    } catch (error) {
+      throw new DBError(
+        `SQLite query failed: ${error instanceof Error ? error.message : String(error)}`,
+        { query, params },
+        error
+      );
+    }
   }
 
   /**
@@ -125,11 +173,11 @@ export class SQLiteWrapper {
    * @param schema - Object mapping column names to their SQL type definitions
    * @returns Statement run result
    */
-  async createTable(name: string, schema: Record<string, string>) {
+  async createTable(name: string, schema: Record<string, string>): Promise<unknown> {
     const columns = Object.entries(schema)
-      .map(([key, value]) => `${key} ${value}`)
+      .map(([key, value]) => `${quoteIdentifier(key)} ${value}`)
       .join(", ");
-    const query = `CREATE TABLE IF NOT EXISTS ${name} (${columns})`;
+    const query = `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(name)} (${columns})`;
     return await this.run(query);
   }
 
@@ -139,9 +187,12 @@ export class SQLiteWrapper {
    * @param data - Object with column-value pairs to insert
    * @returns Inserted row(s)
    */
-  async insert(table: string, data: Record<string, any>) {
-    // Use Bun's SQL helper for object insertion
-    return await this.db`INSERT INTO ${this.db(table)} ${this.db(data)} RETURNING *`;
+  async insert<T extends Record<string, unknown>>(table: string, data: T): Promise<T[]> {
+    // Validate identifier before use
+    quoteIdentifier(table);
+    // Use Bun's SQL helper for object insertion - it handles escaping internally
+    const result = await this.db`INSERT INTO ${this.db(table)} ${this.db(data)} RETURNING *`;
+    return result as T[];
   }
 
   /**
@@ -150,11 +201,11 @@ export class SQLiteWrapper {
    * @param data - Object with column-value pairs to insert
    * @returns Statement run result
    */
-  async insertOrIgnore(table: string, data: Record<string, any>) {
+  async insertOrIgnore<T extends Record<string, unknown>>(table: string, data: T): Promise<unknown> {
     const columns = Object.keys(data);
     const values = Object.values(data);
     const placeholders = values.map(() => "?").join(", ");
-    const query = `INSERT OR IGNORE INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`;
+    const query = `INSERT OR IGNORE INTO ${quoteIdentifier(table)} (${columns.map(quoteIdentifier).join(", ")}) VALUES (${placeholders})`;
     return await this.run(query, values);
   }
 
@@ -166,25 +217,25 @@ export class SQLiteWrapper {
    * @param updateOnConflict - If true, updates non-conflict columns; if false, does nothing (default: true)
    * @returns Statement run result
    */
-  async upsert(
+  async upsert<T extends Record<string, unknown>>(
     table: string,
-    data: Record<string, any>,
+    data: T,
     conflictColumns: string[],
     updateOnConflict = true
-  ) {
+  ): Promise<unknown> {
     const columns = Object.keys(data);
     const values = Object.values(data);
     const placeholders = columns.map(() => "?").join(", ");
-    let query = `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`;
+    let query = `INSERT INTO ${quoteIdentifier(table)} (${columns.map(quoteIdentifier).join(", ")}) VALUES (${placeholders})`;
     if (conflictColumns?.length) {
       if (updateOnConflict) {
         const setClause = columns
           .filter(c => !conflictColumns.includes(c))
-          .map(c => `${c} = excluded.${c}`)
+          .map(c => `${quoteIdentifier(c)} = excluded.${quoteIdentifier(c)}`)
           .join(", ");
-        query += ` ON CONFLICT(${conflictColumns.join(",")}) DO UPDATE SET ${setClause || conflictColumns.map((c: string) => `${c}=${c}`).join(",")}`;
+        query += ` ON CONFLICT(${conflictColumns.map(quoteIdentifier).join(",")}) DO UPDATE SET ${setClause || conflictColumns.map((c: string) => `${quoteIdentifier(c)}=${quoteIdentifier(c)}`).join(",")}`;
       } else {
-        query += ` ON CONFLICT(${conflictColumns.join(",")}) DO NOTHING`;
+        query += ` ON CONFLICT(${conflictColumns.map(quoteIdentifier).join(",")}) DO NOTHING`;
       }
     }
     return await this.run(query, values);
@@ -198,16 +249,16 @@ export class SQLiteWrapper {
    * @param whereParams - Parameters for the WHERE clause (default: [])
    * @returns Statement run result with changes count
    */
-  async update(
+  async update<T extends Record<string, unknown>>(
     table: string,
-    data: Record<string, any>,
+    data: T,
     whereClause: string,
     whereParams: any[] = []
-  ) {
+  ): Promise<unknown> {
     // Build UPDATE query with Bun's SQL helper for the SET clause
-    const setClause = Object.keys(data).map(k => `${k} = ?`).join(", ");
+    const setClause = Object.keys(data).map(k => `${quoteIdentifier(k)} = ?`).join(", ");
     const values = Object.values(data);
-    const query = `UPDATE ${table} SET ${setClause} WHERE ${whereClause}`;
+    const query = `UPDATE ${quoteIdentifier(table)} SET ${setClause} WHERE ${whereClause}`;
     return await this.run(query, [...values, ...whereParams]);
   }
 
@@ -218,8 +269,8 @@ export class SQLiteWrapper {
    * @param whereParams - Parameters for the WHERE clause (default: [])
    * @returns Statement run result with changes count
    */
-  async delete(table: string, whereClause: string, whereParams: any[] = []) {
-    const query = `DELETE FROM ${table} WHERE ${whereClause}`;
+  async delete(table: string, whereClause: string, whereParams: any[] = []): Promise<unknown> {
+    const query = `DELETE FROM ${quoteIdentifier(table)} WHERE ${whereClause}`;
     return await this.run(query, whereParams);
   }
 
@@ -231,14 +282,14 @@ export class SQLiteWrapper {
    * @param whereParams - Parameters for the WHERE clause (default: [])
    * @returns Array of row objects
    */
-  async select(
+  async select<T = unknown>(
     table: string,
     columns = "*",
     whereClause: string | null = null,
     whereParams: any[] = []
-  ) {
-    const query = `SELECT ${columns} FROM ${table}${whereClause ? ` WHERE ${whereClause}` : ""}`;
-    return await this.all(query, whereParams);
+  ): Promise<T[]> {
+    const query = `SELECT ${columns} FROM ${quoteIdentifier(table)}${whereClause ? ` WHERE ${whereClause}` : ""}`;
+    return await this.all<T>(query, whereParams);
   }
 
   /**
@@ -248,9 +299,9 @@ export class SQLiteWrapper {
    * @param whereParams - Parameters for the WHERE clause (default: [])
    * @returns Single row object or undefined
    */
-  async getRow(table: string, whereClause: string, whereParams: any[] = []) {
-    const query = `SELECT * FROM ${table} WHERE ${whereClause}`;
-    return await this.get(query, whereParams);
+  async getRow<T = unknown>(table: string, whereClause: string, whereParams: any[] = []): Promise<T | undefined> {
+    const query = `SELECT * FROM ${quoteIdentifier(table)} WHERE ${whereClause}`;
+    return await this.get<T>(query, whereParams);
   }
 
   /**
@@ -261,20 +312,37 @@ export class SQLiteWrapper {
    * @param whereParams - Parameters for the WHERE clause (default: [])
    * @returns Single scalar value or undefined
    */
-  async getValue(
+  async getValue<T = unknown>(
     table: string,
     column: string,
     whereClause: string,
     whereParams: any[] = []
-  ) {
-    const query = `SELECT ${column} FROM ${table} WHERE ${whereClause}`;
-    return await this.scalar(query, whereParams);
+  ): Promise<T | undefined> {
+    const query = `SELECT ${quoteIdentifier(column)} FROM ${quoteIdentifier(table)} WHERE ${whereClause}`;
+    return await this.scalar<T>(query, whereParams);
   }
 
   /**
    * Close the database connection
    */
-  async close() {
+  async close(): Promise<void> {
     await this.db.close();
   }
+
+  /**
+   * Support for async dispose pattern (using await ... syntax)
+   * Automatically closes connection when wrapper goes out of scope
+   */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
+  }
+}
+
+/**
+ * Factory function to create a SQLite wrapper instance
+ * @param dbPath - Path to database file or ":memory:" for in-memory database
+ * @returns A new SQLiteWrapper instance
+ */
+export function createSQLite(dbPath: string): SQLiteWrapper {
+  return new SQLiteWrapper(dbPath);
 }

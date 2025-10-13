@@ -18,8 +18,13 @@
     "test:sqlite": "bun test tests/sqlitewrapper.test.ts",
     "test:redis": "bun test tests/rediswrapper.test.ts",
     "test:mysql": "bun test tests/mysqlwrapper.test.ts",
+    "demo:comprehensive": "bun run src/demos/comprehensive_demo.ts",
+    "demo:improvements": "bun run src/demos/improvements_demo.ts",
     "demo:mysql": "bun run src/demos/mysql_demo.ts",
     "demo:redis": "bun run src/demos/redis_demo.ts",
-    "demo:sqlite": "bun run src/demos/sqlite_demo.ts"
+    "demo:sqlite": "bun run src/demos/sqlite_demo.ts",
+    "demo:mysql-comprehensive": "bun run src/demos/comprehensive_mysql_demo.ts",
+    "demo:redis-comprehensive": "bun run src/demos/comprehensive_redis_demo.ts",
+    "demo:sqlite-comprehensive": "bun run src/demos/comprehensive_sqlite_demo.ts"
   }
 }
