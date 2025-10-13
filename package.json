@@ -1,0 +1,25 @@
+{
+  "name": "bun_practice",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "cli-table3": "^0.6.5"
+  },
+  "scripts": {
+    "test": "bun test",
+    "test:sqlite": "bun test tests/sqlitewrapper.test.ts",
+    "test:redis": "bun test tests/rediswrapper.test.ts",
+    "test:mysql": "bun test tests/mysqlwrapper.test.ts",
+    "demo:mysql": "bun run src/demos/mysql_demo.ts",
+    "demo:redis": "bun run src/demos/redis_demo.ts",
+    "demo:sqlite": "bun run src/demos/sqlite_demo.ts"
+  }
+}
