@@ -206,10 +206,21 @@ bun run demo:improvements
 
 ### Importing Wrappers
 
+You can import wrappers individually or from the main index file:
+
 ```typescript
+// Option 1: Import from individual files
 import { MySQLWrapper } from "./src/wrappers/mysqlwrapper";
 import { RedisWrapper } from "./src/wrappers/rediswrapper";
 import { SQLiteWrapper } from "./src/wrappers/sqlitewrapper";
+
+// Option 2: Import from the wrappers index (recommended)
+import { MySQLWrapper, RedisWrapper, SQLiteWrapper } from "./src/wrappers/index";
+// or shorter:
+import { MySQLWrapper, RedisWrapper, SQLiteWrapper } from "./src/wrappers";
+
+// Option 3: Import factory functions from wrappers index
+import { createMySQL, createRedis, createSQLite } from "./src/wrappers";
 ```
 
 ## Why Use These Wrappers?
