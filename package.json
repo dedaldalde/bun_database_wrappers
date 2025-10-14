@@ -25,6 +25,7 @@
     "demo:sqlite": "bun run src/demos/sqlite_demo.ts",
     "demo:mysql-comprehensive": "bun run src/demos/comprehensive_mysql_demo.ts",
     "demo:redis-comprehensive": "bun run src/demos/comprehensive_redis_demo.ts",
-    "demo:sqlite-comprehensive": "bun run src/demos/comprehensive_sqlite_demo.ts"
+    "demo:sqlite-comprehensive": "bun run src/demos/comprehensive_sqlite_demo.ts",
+    "demo:redis-namespace": "bun run src/demos/redis_namespace_demo.ts"
   }
 }
